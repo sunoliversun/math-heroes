@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Math Heroes · Parent & Teacher Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
+  <style>
+    :root { --ink:#21304a; --blue:#3b9bff; --green:#36c46a; --purple:#a45bff; --bg:#f3f6fb; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, 'Segoe UI', sans-serif; background: var(--bg); color: var(--ink); }
+    header { background: linear-gradient(90deg, var(--blue), var(--purple)); color:#fff; padding: 20px 28px; }
+    header h1 { margin:0; font-size: 24px; }
+    header p { margin: 4px 0 0; opacity:.9; font-size: 14px; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+    .login-card { max-width: 380px; margin: 60px auto; background:#fff; border-radius:18px; padding:28px; box-shadow: 0 10px 30px rgba(0,0,0,.12); text-align:center; }
+    .login-card h2 { margin-top:0; }
+    .login-card input { width:100%; padding:12px; font-size:16px; border:2px solid #dfe6f2; border-radius:12px; margin:10px 0; }
+    .login-card button { width:100%; padding:12px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:var(--blue); color:#fff; cursor:pointer; }
+    .err { color:#e23b3b; font-weight:600; min-height:20px; }
+
+    .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap:14px; margin-bottom:22px; }
+    .stat { background:#fff; border-radius:16px; padding:16px 18px; box-shadow:0 4px 14px rgba(0,0,0,.06); }
+    .stat .num { font-size:30px; font-weight:800; color:var(--blue); }
+    .stat .lbl { font-size:13px; color:#6b788f; margin-top:2px; }
+
+    table { width:100%; border-collapse: collapse; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 4px 14px rgba(0,0,0,.06); }
+    th, td { padding:11px 12px; text-align:left; font-size:14px; border-bottom:1px solid #eef2f8; }
+    th { background:#f7f9fd; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#6b788f; cursor:pointer; user-select:none; }
+    tr:last-child td { border-bottom:none; }
+    .acc { display:inline-block; min-width:42px; text-align:center; padding:2px 8px; border-radius:20px; font-weight:700; font-size:12px; color:#fff; }
+    .toolbar { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+    .toolbar input { padding:9px 12px; border:2px solid #dfe6f2; border-radius:10px; font-size:14px; }
+    .btn { padding:9px 14px; border:none; border-radius:10px; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.08); cursor:pointer; font-weight:600; font-size:14px; }
+    .muted { color:#9aa6b8; }
+    .section-title { margin: 26px 0 10px; font-size:18px; }
+    .hidden { display:none; }
+    @media (max-width:640px){ table { font-size:12px; } th,td{ padding:8px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📊 Math Heroes — Parent & Teacher Dashboard</h1>
+    <p>Track each child's progress, math accuracy, and play time.</p>
+  </header>
+
+  <!-- Login -->
+  <div id="login" class="login-card">
+    <h2>🔒 Enter passcode</h2>
+    <input id="pass" type="password" placeholder="Teacher passcode" />
+    <button id="enter">View Dashboard</button>
+    <p class="err" id="login-err"></p>
+    <p class="muted" style="font-size:12px">Set with the <code>TEACHER_PASSCODE</code> environment variable.</p>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="board" class="wrap hidden">
+    <div class="cards" id="summary"></div>
+
+    <div class="toolbar">
+      <input id="search" placeholder="🔎 Search a hero name…" />
+      <button class="btn" id="refresh">🔄 Refresh</button>
+      <button class="btn" id="csv">⬇️ Export CSV</button>
+      <span class="muted" id="updated"></span>
+    </div>
+
+    <table id="table">
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p class="muted" id="empty"></p>
+  </div>
+
+  <script>
+    const SKILL_LABELS = { count:'Count', add:'Add', sub:'Sub', mul:'×', div:'÷', pattern:'Pattern', fraction:'Frac' };
+    let DATA = null, passcode = '', sortKey = 'totalScore', sortDir = -1;
+
+    const $ = s => document.querySelector(s);
+
+    $('#enter').onclick = login;
+    $('#pass').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+    $('#refresh').onclick = load;
+    $('#search').addEventListener('input', render);
+    $('#csv').onclick = exportCsv;
+
+    async function login() {
+      passcode = $('#pass').value.trim();
+      const ok = await load();
+      if (ok) { $('#login').classList.add('hidden'); $('#board').classList.remove('hidden'); }
+    }
+
+    async function load() {
+      try {
+        const res = await fetch('/api/dashboard?pass=' + encodeURIComponent(passcode));
+        if (res.status === 401) { $('#login-err').textContent = 'Wrong passcode. Try again.'; return false; }
+        DATA = await res.json();
+        render();
+        return true;
+      } catch (e) {
+        $('#login-err').textContent = 'Could not reach the server.';
+        return false;
+      }
+    }
+
+    function accColor(a) {
+      if (a == null) return '#c4cdda';
+      if (a >= 80) return '#36c46a';
+      if (a >= 50) return '#f3a712';
+      return '#e2603b';
+    }
+
+    function render() {
+      if (!DATA) return;
+      const t = DATA.totals;
+      $('#summary').innerHTML = `
+        ${card(t.children, 'Heroes')}
+        ${card(t.puzzlesSolved, 'Puzzles solved')}
+        ${card(t.trophies, '🏆 Trophies won')}
+        ${card(t.playMinutes + 'm', 'Total play time')}`;
+      $('#updated').textContent = 'Updated ' + new Date(DATA.generatedAt).toLocaleTimeString();
+
+      // header
+      const cols = [
+        ['username','Hero'], ['highestStage','Stage'], ['totalScore','Score'],
+        ['trophies','🏆'], ['coins','🪙'], ['puzzlesSolved','Solved'],
+        ['overallAccuracy','Accuracy'], ['playMinutes','Mins']
+      ];
+      $('#thead').innerHTML = cols.map(c => `<th data-k="${c[0]}">${c[1]}</th>`).join('')
+        + DATA.skills.map(s => `<th data-k="skill:${s}">${SKILL_LABELS[s]||s}</th>`).join('')
+        + '<th>Last seen</th>';
+      $('#thead').querySelectorAll('th[data-k]').forEach(th => {
+        th.onclick = () => { const k = th.dataset.k; if (sortKey===k) sortDir*=-1; else { sortKey=k; sortDir=-1; } render(); };
+      });
+
+      const q = $('#search').value.trim().toLowerCase();
+      let kids = DATA.kids.filter(k => k.username.toLowerCase().includes(q));
+      kids.sort((a,b) => {
+        let va, vb;
+        if (sortKey.startsWith('skill:')) { const s=sortKey.slice(6); va=a.perSkill[s].accuracy??-1; vb=b.perSkill[s].accuracy??-1; }
+        else { va=a[sortKey]; vb=b[sortKey]; }
+        if (typeof va === 'string') return sortDir * va.localeCompare(vb);
+        return sortDir * ((va??-1) - (vb??-1));
+      });
+
+      $('#tbody').innerHTML = kids.map(k => `
+        <tr>
+          <td><strong>${esc(k.username)}</strong></td>
+          <td>${k.highestStage + 1}/5</td>
+          <td>${k.totalScore}</td>
+          <td>${k.trophies}</td>
+          <td>${k.coins}</td>
+          <td>${k.puzzlesSolved}</td>
+          <td><span class="acc" style="background:${accColor(k.overallAccuracy)}">${k.overallAccuracy==null?'—':k.overallAccuracy+'%'}</span></td>
+          <td>${k.playMinutes}</td>
+          ${DATA.skills.map(s => { const e=k.perSkill[s]; return `<td><span class="acc" style="background:${accColor(e.accuracy)}" title="${e.correct}/${e.attempts}">${e.accuracy==null?'—':e.accuracy+'%'}</span></td>`; }).join('')}
+          <td class="muted">${k.lastSeen ? new Date(k.lastSeen).toLocaleDateString() : '—'}</td>
+        </tr>`).join('');
+      $('#empty').textContent = kids.length ? '' : 'No hero profiles yet. Kids who add a PIN will appear here.';
+    }
+
+    function card(num, lbl) { return `<div class="stat"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`; }
+    function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+    function exportCsv() {
+      if (!DATA) return;
+      const head = ['Hero','HighestStage','Score','Trophies','Coins','Solved','Attempted','Accuracy%','PlayMinutes',
+        ...DATA.skills.map(s=>SKILL_LABELS[s]+'Acc%'), 'LastSeen'];
+      const rows = DATA.kids.map(k => [k.username, k.highestStage+1, k.totalScore, k.trophies, k.coins,
+        k.puzzlesSolved, k.puzzlesAttempted, k.overallAccuracy??'', k.playMinutes,
+        ...DATA.skills.map(s=>k.perSkill[s].accuracy??''), k.lastSeen??'']);
+      const csv = [head, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type:'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'math-heroes-progress.csv'; a.click();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# One-click deploy to Render's FREE tier (no credit card needed).
+# Render reads this Blueprint when you create a service from your GitHub repo.
+#
+# The free web service supports WebSockets (so multiplayer works) but has NO
+# persistent disk and sleeps after ~15 min idle. To keep saved kid profiles
+# across restarts, point DATABASE_URL at a free Neon Postgres database
+# (https://neon.tech — also free, no card). See the README "Deploying" section.
+services:
+  - type: web
+    name: math-heroes
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: TEACHER_PASSCODE
+        sync: false          # set your own secret passcode in the Render UI
+      - key: DATABASE_URL
+        sync: false          # paste your free Neon Postgres connection string

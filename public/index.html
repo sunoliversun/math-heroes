@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Math Heroes: The Five Realms 🦸</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦸</text></svg>" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 3D canvas goes here -->
+  <div id="game-root"></div>
+
+  <!-- Shown while a realm's photoreal HDRI sky + PBR textures stream in -->
+  <div id="loading-veil" class="loading-veil hidden">
+    <div class="loading-card">
+      <div class="loading-spinner"></div>
+      <div class="loading-text" id="loading-text">Conjuring the realm…</div>
+    </div>
+  </div>
+
+  <!-- ============ START / LOBBY SCREEN ============ -->
+  <div id="start-screen" class="overlay">
+    <div class="panel start-panel">
+      <h1 class="title">Math&nbsp;Heroes</h1>
+      <p class="subtitle">The Five Realms ✨</p>
+
+      <label class="field">
+        <span>Your hero name</span>
+        <input id="name-input" maxlength="14" placeholder="e.g. SuperSam" autocomplete="off" />
+      </label>
+
+      <!-- Optional account: save coins & costumes with a 4-digit PIN -->
+      <div class="account-box">
+        <div id="account-loggedout">
+          <div class="account-row">
+            <input id="pin-input" maxlength="4" inputmode="numeric" placeholder="PIN" class="pin-input" autocomplete="off" />
+            <button id="login-btn" class="mini-action">🔑 Log In</button>
+            <button id="register-btn" class="mini-action">✨ New Hero</button>
+          </div>
+          <p class="account-hint">Add a 4-digit PIN to save your coins & costumes. Or just play as a guest!</p>
+        </div>
+        <div id="account-loggedin" class="hidden">
+          <span class="account-status">⭐ Saved hero: <strong id="account-name"></strong> · 🪙 <span id="account-coins">0</span></span>
+          <button id="logout-btn" class="mini-action">Log out</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span>Pick your hero</span>
+        <div id="hero-pick" class="hero-pick"></div>
+      </div>
+
+      <div class="start-actions">
+        <button id="create-btn" class="big-btn green">🚀 Start New Game</button>
+        <div class="join-row">
+          <input id="code-input" maxlength="4" placeholder="CODE" class="code-input" autocomplete="off" />
+          <button id="join-btn" class="big-btn blue">Join Friend</button>
+        </div>
+      </div>
+      <p id="start-error" class="error-msg"></p>
+      <p class="hint-text">Tip: Share your room code with friends so you can play together!</p>
+    </div>
+  </div>
+
+  <!-- ============ HUD (during play) ============ -->
+  <div id="hud" class="hidden">
+    <div class="hud-top">
+      <div class="hud-card stage-card">
+        <div class="stage-name" id="hud-stage">Stage</div>
+        <div class="progress-wrap"><div class="progress-bar" id="hud-progress"></div></div>
+        <div class="stage-points"><span id="hud-points">0</span> / <span id="hud-target">100</span> pts</div>
+      </div>
+      <div class="hud-card coins-card">
+        <span class="coin-icon">🪙</span><span id="hud-coins">0</span>
+      </div>
+      <div class="hud-card room-card">
+        Room <strong id="hud-room">----</strong>
+        <button id="copy-code" class="mini-btn" title="Copy code">📋</button>
+      </div>
+      <button id="shop-btn" class="hud-card btn-card">🛍️ Shop</button>
+    </div>
+
+    <div class="hud-right">
+      <div class="leaderboard">
+        <div class="lb-title">🏆 Leaderboard</div>
+        <ol id="lb-list"></ol>
+      </div>
+    </div>
+
+    <div id="announce" class="announce hidden"></div>
+    <div id="streak-pop" class="streak-pop hidden"></div>
+
+    <!-- Mobile / touch controls -->
+    <div id="touch-controls" class="hidden">
+      <div id="joystick" class="joystick"><div id="stick" class="stick"></div></div>
+      <button id="jump-btn" class="jump-btn">⤴︎</button>
+    </div>
+
+    <div class="hud-help">WASD / arrows to move · Space to jump · walk into glowing orbs</div>
+  </div>
+
+  <!-- ============ PUZZLE MODAL ============ -->
+  <div id="puzzle-modal" class="overlay hidden">
+    <div class="panel puzzle-panel">
+      <div class="puzzle-skill" id="puzzle-skill">Add</div>
+      <div class="puzzle-question" id="puzzle-question">2 + 2 = ?</div>
+      <div class="puzzle-choices" id="puzzle-choices"></div>
+      <div class="puzzle-feedback" id="puzzle-feedback"></div>
+      <button id="puzzle-close" class="text-btn">Skip for now</button>
+    </div>
+  </div>
+
+  <!-- ============ SHOP MODAL ============ -->
+  <div id="shop-modal" class="overlay hidden">
+    <div class="panel shop-panel">
+      <div class="shop-header">
+        <h2>🛍️ Hero Shop</h2>
+        <div class="shop-coins">🪙 <span id="shop-coins">0</span></div>
+        <button id="shop-x" class="text-btn">✕ Close</button>
+      </div>
+      <div class="shop-tabs" id="shop-tabs"></div>
+      <div class="shop-grid" id="shop-grid"></div>
+    </div>
+  </div>
+
+  <!-- ============ WIN / TROPHY SCREEN ============ -->
+  <div id="win-screen" class="overlay hidden">
+    <div class="panel win-panel">
+      <div class="trophy">🏆</div>
+      <h1>You Won the Trophy!</h1>
+      <p id="win-text">A brand new adventure awaits with tougher puzzles!</p>
+      <button id="win-continue" class="big-btn green">Start New Adventure →</button>
+    </div>
+  </div>
+
+  <!-- ============ CHAT ============ -->
+  <div id="chat" class="hidden">
+    <div id="chat-log" class="chat-log"></div>
+    <input id="chat-input" class="chat-input" maxlength="120" placeholder="Press Enter to chat…" />
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

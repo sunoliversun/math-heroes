@@ -1,0 +1,25 @@
+# Deploy to Fly.io:  fly launch --copy-config --name math-heroes   then  fly deploy
+# A persistent volume keeps child profiles. Create it once:
+#   fly volumes create math_heroes_data --size 1
+app = "math-heroes"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  DATA_DIR = "/data"
+  # Set the teacher passcode as a secret instead of here:
+  #   fly secrets set TEACHER_PASSCODE=your-secret
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false   # keep the WebSocket server alive
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "math_heroes_data"
+  destination = "/data"
