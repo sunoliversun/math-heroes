@@ -25,6 +25,29 @@ export function preloadHeroModel() {
   return modelPromise;
 }
 
+// Robustly measure a model's world-space bounding box from its actual geometry,
+// transformed by each mesh's world matrix. Reliable for rigged GLTFs where
+// THREE.Box3.setFromObject() returns a wildly inflated box.
+function measureModel(model) {
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  model.traverse(o => {
+    if ((o.isMesh || o.isSkinnedMesh) && o.geometry) {
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      const bb = o.geometry.boundingBox;
+      const corners = [
+        [bb.min.x, bb.min.y, bb.min.z], [bb.max.x, bb.max.y, bb.max.z],
+        [bb.min.x, bb.max.y, bb.min.z], [bb.max.x, bb.min.y, bb.max.z],
+        [bb.min.x, bb.min.y, bb.max.z], [bb.max.x, bb.max.y, bb.min.z],
+        [bb.min.x, bb.max.y, bb.max.z], [bb.max.x, bb.min.y, bb.min.z]
+      ];
+      for (const [cx, cy, cz] of corners) box.expandByPoint(v.set(cx, cy, cz).applyMatrix4(o.matrixWorld));
+    }
+  });
+  return box;
+}
+
 // Create a hero rig. Async because it waits for the (cached) model.
 export async function createHero(heroId, cosmetics = {}, name = '') {
   const gltf = await preloadHeroModel();
@@ -47,11 +70,18 @@ export async function createHero(heroId, cosmetics = {}, name = '') {
         }
       });
       o.castShadow = true; o.receiveShadow = true;
+      // This model's per-part bounding spheres are near-zero, so three.js would
+      // frustum-cull the whole hero (it vanishes). Disable per-mesh culling.
+      o.frustumCulled = false;
     }
   });
 
   // Normalize size so the hero is ~2.2 units tall with feet on the ground.
-  const box = new THREE.Box3().setFromObject(model);
+  // NOTE: THREE.Box3().setFromObject() mis-measures this rigged model — it
+  // reports a height ~27x too large, yielding a microscopic (invisible) hero.
+  // Measure the real bounds from transformed geometry corners instead, after
+  // forcing a world-matrix update.
+  const box = measureModel(model);
   const h = (box.max.y - box.min.y) || 1;
   const scale = 2.2 / h;
   model.scale.setScalar(scale);
@@ -237,12 +267,19 @@ export class LocalPlayer {
     if (k['KeyD'] || k['ArrowRight']) mx += 1;
     mx += this.touchDir.x; mz += this.touchDir.y;
 
+    // Move relative to where the camera is looking. Build the camera's forward
+    // and right vectors on the ground plane so W = into the screen and D = screen
+    // right, for any camera orientation. (The old atan2(x,z) yaw evaluated to π
+    // for the trailing camera and negated both axes — inverting all controls.)
     const camDir = new THREE.Vector3();
     camera.getWorldDirection(camDir);
-    const yaw = Math.atan2(camDir.x, camDir.z);
-    const sin = Math.sin(yaw), cos = Math.cos(yaw);
-    let wx = mx * cos - mz * sin;
-    let wz = mx * sin + mz * cos;
+    camDir.y = 0;
+    if (camDir.lengthSq() < 1e-6) camDir.set(0, 0, -1);
+    camDir.normalize();
+    const fwdAmount = -mz;            // W (mz=-1) → forward
+    const rightAmount = mx;          // D (mx=+1) → right
+    let wx = fwdAmount * camDir.x + rightAmount * (-camDir.z);
+    let wz = fwdAmount * camDir.z + rightAmount * (camDir.x);
     const len = Math.hypot(wx, wz);
     let moving = false;
     if (len > 0.01) {
