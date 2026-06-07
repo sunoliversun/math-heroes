@@ -45,8 +45,9 @@ const BIOME_ASSETS = {
 };
 
 export class World {
-  constructor(renderer) {
+  constructor(renderer, quality = {}) {
     this.renderer = renderer;
+    this.q = quality;            // active quality-tier settings (see quality.js)
     this.scene = new THREE.Scene();
     this.orbMeshes = new Map();
     this.decor = [];
@@ -62,7 +63,8 @@ export class World {
     this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xffffff, 2.2);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    const shadowSize = this.q.shadowMapSize || 2048;
+    this.sun.shadow.mapSize.set(shadowSize, shadowSize);
     this.sun.shadow.bias = -0.0004;
     const d = 90;
     Object.assign(this.sun.shadow.camera, { left: -d, right: d, top: d, bottom: -d, near: 1, far: 400 });
@@ -87,23 +89,45 @@ export class World {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
     // Ground-truth ambient occlusion (GTAO): adds the soft contact shadows that
-    // sell realism — darkening creases between rocks, grass roots, hero feet on
-    // the ground. Guarded so a driver hiccup can't break the whole pipeline.
+    // sell realism — but it's the most expensive pass, so it's enabled only on
+    // the High tier. Guarded so a driver hiccup can't break the whole pipeline.
     try {
       const gtao = new GTAOPass(this.scene, this.camera, w, h);
       gtao.output = GTAOPass.OUTPUT.Default;
       gtao.updateGtaoMaterial({ radius: 3.0, distanceExponent: 1.0, thickness: 1.0, scale: 1.0, samples: 16, screenSpaceRadius: false });
       gtao.blendIntensity = 0.9;
+      gtao.enabled = this.q.gtao !== false;
       this.gtao = gtao;
       this.composer.addPass(gtao);
     } catch (e) { console.warn('GTAO unavailable, continuing without it', e); }
 
     // Subtle bloom: only the brightest things (orbs, sun glints) glow.
     const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.35, 0.4, 0.9);
+    bloom.enabled = this.q.bloom !== false;
     this.bloom = bloom;
     this.composer.addPass(bloom);
-    this.composer.addPass(new SMAAPass(w, h));
+    const smaa = new SMAAPass(w, h);
+    smaa.enabled = this.q.smaa !== false;
+    this.smaa = smaa;
+    this.composer.addPass(smaa);
     this.composer.addPass(new OutputPass());
+  }
+
+  // Re-tune the live pipeline to a new quality-tier settings object without
+  // rebuilding the scene. Pixel ratio is handled by the caller on the renderer.
+  setQuality(q) {
+    this.q = q;
+    if (this.gtao) this.gtao.enabled = q.gtao !== false;
+    if (this.bloom) this.bloom.enabled = q.bloom !== false;
+    if (this.smaa) this.smaa.enabled = q.smaa !== false;
+    // Resize the shadow map live.
+    const size = q.shadowMapSize || 1024;
+    this.sun.shadow.mapSize.set(size, size);
+    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    // Sky crispness.
+    if (this.scene.background && this.scene.background.isTexture) {
+      this.scene.backgroundBlurriness = q.hdriBackground === 'blur' ? 0.35 : 0.0;
+    }
   }
 
   // ---- Terrain height field (shared by mesh + gameplay) ----
@@ -172,7 +196,7 @@ export class World {
       this.scene.environment = this._envRT.texture;
       this.scene.background = hdri;
       this.scene.backgroundIntensity = assets.bg ?? 1.0;  // tame the bright HDR sky
-      this.scene.backgroundBlurriness = 0.0;
+      this.scene.backgroundBlurriness = this.q.hdriBackground === 'blur' ? 0.35 : 0.0;
       this.sky.visible = false;
       if (this.ground) this.ground.material.envMapIntensity = assets.envI ?? 1.0;
     } else {
@@ -231,7 +255,7 @@ export class World {
   async _applyGroundPBR(assets) {
     const ground = this.ground;
     let set = null;
-    try { set = await loadGroundPBR(assets.ground, assets.repeat || 40); }
+    try { set = await loadGroundPBR(assets.ground, assets.repeat || 40, this.q.anisotropy || 8); }
     catch (e) { console.warn('PBR ground load failed, keeping procedural texture', e); return; }
     if (!ground || ground !== this.ground) return; // stage changed mid-load
 

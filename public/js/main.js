@@ -7,6 +7,7 @@ import { World } from './world.js';
 import { preloadHeroModel, createHero, LocalPlayer, RemotePlayer } from './player.js';
 import { UI } from './ui.js';
 import { Audio } from './audio.js';
+import { resolveTier, getSettings, loadPreference, savePreference, lowerTier } from './quality.js';
 import { STAGES, WORLD, FINAL_STAGE_INDEX } from '/shared/config.js';
 
 const net = new Net();
@@ -16,7 +17,6 @@ const audio = new Audio();
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -24,7 +24,25 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.72;
 document.getElementById('game-root').appendChild(renderer.domElement);
 
-const world = new World(renderer);
+// ---------- Adaptive graphics quality ----------
+// Browser 3D renders on the player's own device, so quality must scale to the
+// hardware. Pick a tier (device-detected unless the player chose one), apply it,
+// and let an FPS watchdog step it down if the machine struggles.
+let qualityPref = loadPreference();          // 'auto' | 'low' | 'medium' | 'high'
+let qualityTier = resolveTier(qualityPref);  // concrete tier name
+let qualitySettings = getSettings(qualityTier);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, qualitySettings.pixelRatio));
+
+const world = new World(renderer, qualitySettings);
+
+function applyQuality(tierName, { announce = false } = {}) {
+  qualityTier = tierName;
+  qualitySettings = getSettings(tierName);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, qualitySettings.pixelRatio));
+  world.setQuality(qualitySettings);
+  updateQualityButton();
+  if (announce) ui.announce(`Graphics set to ${qualitySettings.label} for smoother play`);
+}
 
 // Game state
 const state = {
@@ -53,6 +71,27 @@ function showLoading(text) {
   loadingVeil && loadingVeil.classList.remove('hidden');
 }
 function hideLoading() { loadingVeil && loadingVeil.classList.add('hidden'); }
+
+// Quality toggle in the HUD: cycles Auto → Low → Medium → High. Auto lets the
+// device-detected tier and the FPS watchdog manage it.
+const QUALITY_CYCLE = ['auto', 'low', 'medium', 'high'];
+const qualityBtn = document.createElement('button');
+qualityBtn.id = 'quality-btn';
+qualityBtn.className = 'hud-card btn-card';
+qualityBtn.title = 'Graphics quality';
+const hudTop = document.querySelector('.hud-top');
+if (hudTop) hudTop.appendChild(qualityBtn);
+function updateQualityButton() {
+  const lbl = getSettings(qualityTier).label;
+  qualityBtn.textContent = qualityPref === 'auto' ? `🎚️ Auto·${lbl}` : `🎚️ ${lbl}`;
+}
+qualityBtn.addEventListener('click', () => {
+  const i = QUALITY_CYCLE.indexOf(qualityPref);
+  qualityPref = QUALITY_CYCLE[(i + 1) % QUALITY_CYCLE.length];
+  savePreference(qualityPref);
+  applyQuality(resolveTier(qualityPref));
+});
+updateQualityButton();
 
 // One shared connection for auth + gameplay, opened lazily.
 let connecting = null;
@@ -120,6 +159,7 @@ net.on('joined', async (m) => {
   // Build world for the stage (streams the realm's HDRI sky + PBR ground)
   showLoading(`Entering ${STAGES[state.stage].name}…`);
   await world.buildStage(state.stage, state.roomCode, state.adventure);
+  noteRealmLoaded();
   world.setOrbs(state.orbs);
   if (state.stage === FINAL_STAGE_INDEX) world.showTrophy();
 
@@ -219,6 +259,7 @@ net.on('stageChanged', async (m) => {
   if (state.local) { state.local.mesh.position.set(0, 0, 0); state.local.vel.set(0, 0, 0); }
   showLoading(`Entering ${STAGES[state.stage].name}…`);
   await world.buildStage(state.stage, state.roomCode, state.adventure);
+  noteRealmLoaded();
   world.setOrbs(state.orbs);
   if (state.stage === FINAL_STAGE_INDEX) world.showTrophy();
   ui.setStage(state.stage, 0);
@@ -308,11 +349,31 @@ function updateCamera(dt) {
   world.camera.lookAt(target.x, target.y + 2, target.z);
 }
 
+// ---------- FPS watchdog ----------
+// When on Auto, if the framerate stays low for a few seconds, step the quality
+// down one tier (until Low). Only measures during active play, ignores the
+// first second after a realm loads (asset decode stalls would skew it).
+let fpsFrames = 0, fpsWindowStart = performance.now(), fpsGraceUntil = 0;
+function noteRealmLoaded() { fpsGraceUntil = performance.now() + 1500; fpsFrames = 0; fpsWindowStart = performance.now(); }
+function fpsWatchdog(now) {
+  if (!state.local || qualityPref !== 'auto' || now < fpsGraceUntil) { fpsFrames = 0; fpsWindowStart = now; return; }
+  fpsFrames++;
+  const elapsed = now - fpsWindowStart;
+  if (elapsed < 3000) return;
+  const fps = fpsFrames / (elapsed / 1000);
+  fpsFrames = 0; fpsWindowStart = now;
+  if (fps < 26) {
+    const lower = lowerTier(qualityTier);
+    if (lower) { applyQuality(lower, { announce: true }); fpsGraceUntil = now + 2000; }
+  }
+}
+
 // ---------- Main loop ----------
 let last = performance.now();
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  fpsWatchdog(now);
 
   if (state.local) {
     const moving = state.local.update(dt, world.camera, () => audio.jump(),
